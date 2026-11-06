@@ -5,6 +5,7 @@ Secrets are never hard-coded; anything sensitive must come from the environment.
 
 from __future__ import annotations
 
+from pathlib import Path
 from typing import Literal
 
 from pydantic import Field
@@ -12,6 +13,9 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 
 LogLevel = Literal["DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"]
 BackendName = Literal["fake"]
+
+# src/tcmcp/config.py -> repository root /reports (works for a source checkout).
+DEFAULT_REPORTS_DIR = Path(__file__).resolve().parents[2] / "reports"
 
 
 class Settings(BaseSettings):
@@ -22,6 +26,8 @@ class Settings(BaseSettings):
     log_level: LogLevel = "INFO"
     backend: BackendName = "fake"
     max_text_chars: int = Field(default=5000, ge=1, le=100_000)
+    call_timeout_s: float = Field(default=10.0, gt=0.0, le=300.0)
+    reports_dir: Path = DEFAULT_REPORTS_DIR
 
 
 def load_settings() -> Settings:

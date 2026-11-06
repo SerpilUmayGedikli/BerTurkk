@@ -13,6 +13,7 @@ from tcmcp.config import Settings
 from tcmcp.server import SERVER_NAME, build_server
 
 MODERN = "2026-07-28"
+EXPECTED_TOOLS = ["classify_news", "classify_sentiment", "list_reports"]
 
 
 @pytest.fixture
@@ -35,9 +36,9 @@ async def test_in_memory_connect_modern(client: Client) -> None:
 
 
 @pytest.mark.anyio
-async def test_stage1_has_no_tools(client: Client) -> None:
+async def test_registered_tools(client: Client) -> None:
     result = await client.list_tools()
-    assert result.tools == []
+    assert [t.name for t in result.tools] == EXPECTED_TOOLS
 
 
 def _stdio_params() -> StdioServerParameters:
@@ -50,14 +51,14 @@ async def test_stdio_subprocess_modern() -> None:
         assert c.protocol_version == MODERN
         assert c.server_info is not None
         assert c.server_info.name == SERVER_NAME
-        assert (await c.list_tools()).tools == []
+        assert [t.name for t in (await c.list_tools()).tools] == EXPECTED_TOOLS
 
 
 @pytest.mark.anyio
 async def test_stdio_subprocess_legacy_handshake() -> None:
     async with Client(_stdio_params(), mode="legacy") as c:
         assert c.protocol_version != MODERN
-        assert (await c.list_tools()).tools == []
+        assert [t.name for t in (await c.list_tools()).tools] == EXPECTED_TOOLS
 
 
 def test_stdout_stays_clean_when_stdin_closes() -> None:
