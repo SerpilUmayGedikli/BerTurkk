@@ -1,0 +1,9 @@
+{
+  "mcpServers": {
+    "turkish-nlp-tools": {
+      "command": "uv",
+      "args": ["run", "--directory", "/path/to/mcp-turkish-nlp-tools", "tcmcp"],
+      "env": { "TCMCP_LOG_LEVEL": "INFO" }
+    }
+  }
+}
