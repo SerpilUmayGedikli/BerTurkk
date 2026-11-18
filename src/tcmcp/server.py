@@ -1,7 +1,8 @@
 """MCP server entry point (stdio by default).
 
 Tools: ``classify_news``, ``classify_sentiment``, ``list_reports``.
-Resources and prompts are added in Aşama 3.
+Resources: ``reports://{name}`` (read-only, allowed folder only).
+Prompt: ``analyze_text``.
 
 No ``from __future__ import annotations`` here: tool signatures use a per-server
 ``Field`` (max length from settings) that the SDK must evaluate eagerly.
@@ -10,20 +11,30 @@ No ``from __future__ import annotations`` here: tool signatures use a per-server
 import logging
 import math
 import time
+from collections.abc import Callable
+from pathlib import Path
 from typing import Annotated, Any
 
 import anyio
 import anyio.to_thread
+from mcp import MCPError
 from mcp.server import MCPServer
-from mcp.server.mcpserver.exceptions import ToolError
-from mcp.types import ToolAnnotations
+from mcp.server.mcpserver.exceptions import ResourceError, ResourceNotFoundError, ToolError
+from mcp.server.mcpserver.prompts.base import Message, UserMessage
+from mcp.types import INVALID_PARAMS, ToolAnnotations
 from pydantic import Field
 
 from tcmcp import __version__
 from tcmcp.backends import Backend, FakeBackend, Prediction
 from tcmcp.config import Settings, load_settings
 from tcmcp.logging_config import configure_logging
-from tcmcp.resources import list_report_names
+from tcmcp.prompts import TASKS, analyze_text_instructions
+from tcmcp.resources import (
+    ReportAccessError,
+    list_report_names,
+    mime_type_for,
+    read_report,
+)
 from tcmcp.schemas import (
     NEWS_LABELS,
     NOTR_SHORTCUT_NOTE,
@@ -143,8 +154,77 @@ def build_server(
         """List the names of the available experiment reports."""
         return ReportList(reports=list_report_names(cfg.reports_dir))
 
+    _register_report_resources(server, cfg)
+    _register_prompts(server, cfg)
+
     logger.debug("server built (backend=%s)", cfg.backend)
     return server
+
+
+def _read_report_or_raise(reports_dir: Path, name: str) -> str:
+    """Translate ``ReportAccessError`` into the SDK's resource errors (no path in message)."""
+    try:
+        return read_report(reports_dir, name)
+    except ReportAccessError as exc:
+        message = str(exc)
+        if message in ("invalid report name.", "report not found."):
+            raise ResourceNotFoundError(message) from None
+        raise ResourceError(message) from None
+
+
+def _register_report_resources(server: MCPServer[Any], cfg: Settings) -> None:
+    """Register ``reports://{name}``.
+
+    Reports present at start-up are also registered as concrete resources so that
+    ``resources/list`` shows them with the right MIME type. The template serves the same
+    reader for any other name; every read goes through the same checks.
+    """
+    reports_dir = cfg.reports_dir
+
+    def _reader_for(name: str) -> Callable[[], str]:
+        def _reader() -> str:
+            return _read_report_or_raise(reports_dir, name)
+
+        return _reader
+
+    for report_name in list_report_names(reports_dir):
+        server.resource(
+            f"reports://{report_name}",
+            name=report_name,
+            title=report_name,
+            description="Experiment report from the BERTurk project (read-only).",
+            mime_type=mime_type_for(report_name),
+        )(_reader_for(report_name))
+
+    @server.resource(
+        "reports://{name}",
+        title="Experiment report",
+        mime_type="text/plain",
+    )
+    def report(name: str) -> str:
+        """An experiment report by file name (.md or .json), read-only."""
+        return _read_report_or_raise(reports_dir, name)
+
+
+def _register_prompts(server: MCPServer[Any], cfg: Settings) -> None:
+    @server.prompt(title="Analyze Turkish text")
+    def analyze_text(
+        text: Annotated[str, Field(description="Turkish text to classify.")],
+        task: Annotated[
+            str, Field(description="One of: news, sentiment, both (default both).")
+        ] = "both",
+    ) -> list[Message]:
+        """Classify a Turkish text with the news and/or sentiment tools."""
+        if task not in TASKS:
+            raise MCPError(code=INVALID_PARAMS, message="task must be news, sentiment or both.")
+        if not text.strip():
+            raise MCPError(code=INVALID_PARAMS, message="text must not be empty.")
+        if len(text) > cfg.max_text_chars:
+            raise MCPError(
+                code=INVALID_PARAMS,
+                message=f"text is too long: limit is {cfg.max_text_chars} characters.",
+            )
+        return [UserMessage(analyze_text_instructions(task)), UserMessage(text)]
 
 
 def main() -> None:
